@@ -1,0 +1,76 @@
+rules:
+  - id: python-insecure-system-call
+    languages: [python]
+    severity: ERROR
+    message: "Direct execution of shell commands via 'os.system' or 'subprocess(..., shell=True)' poses severe command injection risks."
+    pattern-either:
+      - pattern: os.system(...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+      - pattern: subprocess.run(..., shell=True, ...)
+
+  - id: python-dangerous-eval
+    languages: [python]
+    severity: ERROR
+    message: "Using 'eval()' or 'exec()' on unvalidated inputs allows arbitrary code execution."
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+
+  - id: python-division-by-zero-risk
+    languages: [python]
+    severity: WARNING
+    message: "Division by 'len(...)' without an emptiness check can cause ZeroDivisionError when the sequence is empty."
+    pattern-either:
+      - pattern: $X / len($Y)
+      - pattern: $X // len($Y)
+
+  - id: python-hardcoded-secret
+    languages: [python]
+    severity: WARNING
+    message: "Possible hardcoded secret or token detected. Avoid storing credentials in source code."
+    pattern-regex: '(?i)(api[_-]?key|secret[_-]?key|auth[_-]?token|password)\s*=\s*["''][a-zA-Z0-9_\-\.]{8,}["'']'
+
+  - id: python-bare-except
+    languages: [python]
+    severity: WARNING
+    message: "Catching bare 'except:' or broad 'Exception' without specific handling masks critical bugs."
+    pattern-either:
+      - pattern: |
+          try:
+            ...
+          except:
+            ...
+
+  - id: python-sql-injection-risk
+    languages: [python]
+    severity: ERROR
+    message: "Formatted strings inside SQL execute calls can lead to SQL Injection vulnerabilities. Use parameterized queries."
+    pattern-either:
+      - pattern: $CURSOR.execute(f"...", ...)
+      - pattern: $CURSOR.execute("..." % (...), ...)
+      - pattern: $CURSOR.execute("...".format(...), ...)
+
+  - id: python-insecure-deserialization
+    languages: [python]
+    severity: ERROR
+    message: "Unpickling untrusted data using 'pickle.loads' is unsafe and can lead to remote code execution."
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+
+  - id: javascript-dangerous-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "Using 'eval()' or 'Function()' constructor allows arbitrary code execution in JavaScript."
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: window.eval(...)
+
+  - id: javascript-innerhtml-xss
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Direct assignment to 'innerHTML' or 'outerHTML' can lead to Cross-Site Scripting (XSS) vulnerabilities."
+    pattern-either:
+      - pattern: $E.innerHTML = ...
+      - pattern: $E.outerHTML = ...

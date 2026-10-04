@@ -12,22 +12,34 @@ import {
   Check,
   Wand2,
   AlertCircle,
-  Terminal,
-  ChevronDown
+  HelpCircle,
+  Bug,
+  Zap,
+  Wrench,
+  ShieldAlert,
+  Activity,
+  CheckSquare,
+  Loader2,
+  ChevronDown,
+  Terminal
 } from "lucide-react";
-import { QUICK_PROMPTS } from "../../data/defaultWorkspace";
+import { AI_ACTIONS } from "../../data/defaultWorkspace";
 
 export default function AIAssistant({
   messages,
   busy,
   onSendMessage,
+  onRunAction,
   activeFile,
   onNewChat,
   onOpenDiffModal,
   ollamaOnline,
   modelName,
   availableModels = [],
-  onSelectModel
+  onSelectModel,
+  onRunSemgrep,
+  onRunCombinedReview,
+  isRunningCombinedReview
 }) {
   const [promptText, setPromptText] = useState("");
   const [copiedIndex, setCopiedIndex] = useState(null);
@@ -46,15 +58,17 @@ export default function AIAssistant({
 
   return (
     <aside className="assistant-panel">
-      {/* Header */}
+      {/* Top Assistant Header */}
       <div className="assistant-header">
         <div className="assistant-title">
           <div className="assistant-avatar">
             <Sparkles size={16} />
           </div>
           <div>
-            <h3>CodeSaathi AI</h3>
-            <span className="assistant-sub">Local AI Companion</span>
+            <h3>AI Assistant</h3>
+            <span className="assistant-sub">
+              {ollamaOnline ? "🟢 Local AI Active" : "⚠️ Offline"}
+            </span>
           </div>
         </div>
 
@@ -64,7 +78,7 @@ export default function AIAssistant({
               <select
                 className="model-select-dropdown"
                 value={modelName}
-                onChange={(e) => onSelectModel(e.target.value)}
+                onChange={(e) => onSelectModel && onSelectModel(e.target.value)}
               >
                 {availableModels.map((m) => (
                   <option key={m} value={m}>
@@ -90,22 +104,101 @@ export default function AIAssistant({
         </div>
       </div>
 
-      {/* Context attachment bar */}
+      {/* Active Context Bar */}
       <div className="context-bar">
         <span className="context-indicator" />
-        <span className="context-text">Attached:</span>
+        <span className="context-text">Context:</span>
         <span className="context-file-chip">
           <FileCode2 size={12} /> {activeFile}
         </span>
+
+        <button
+          className="context-review-btn"
+          onClick={onRunCombinedReview}
+          disabled={busy || isRunningCombinedReview}
+          title="Run Semgrep + AI Combined Review"
+        >
+          {isRunningCombinedReview ? (
+            <Loader2 size={11} className="spin" />
+          ) : (
+            <ShieldAlert size={11} />
+          )}
+          <span>Full Review</span>
+        </button>
       </div>
 
-      {/* Chat messages */}
+      {/* Quick AI Action Pills Bar */}
+      <div className="action-pills-bar">
+        <button
+          className="action-pill"
+          disabled={busy}
+          onClick={() => onRunAction && onRunAction("explain")}
+          title="Explain active code"
+        >
+          <HelpCircle size={11} />
+          <span>Explain</span>
+        </button>
+
+        <button
+          className="action-pill"
+          disabled={busy}
+          onClick={() => onRunAction && onRunAction("debug")}
+          title="Debug logic & errors"
+        >
+          <Bug size={11} />
+          <span>Debug</span>
+        </button>
+
+        <button
+          className="action-pill"
+          disabled={busy}
+          onClick={() => onRunAction && onRunAction("optimize")}
+          title="Optimize performance"
+        >
+          <Zap size={11} />
+          <span>Optimize</span>
+        </button>
+
+        <button
+          className="action-pill"
+          disabled={busy}
+          onClick={() => onRunAction && onRunAction("fix_errors")}
+          title="Fix syntax & errors"
+        >
+          <Wrench size={11} />
+          <span>Fix</span>
+        </button>
+
+        <button
+          className="action-pill"
+          disabled={busy}
+          onClick={() => onRunAction && onRunAction("security_review")}
+          title="Security audit"
+        >
+          <ShieldAlert size={11} />
+          <span>Security</span>
+        </button>
+
+        <button
+          className="action-pill"
+          disabled={busy}
+          onClick={() => onRunAction && onRunAction("generate_tests")}
+          title="Generate test cases"
+        >
+          <CheckSquare size={11} />
+          <span>Tests</span>
+        </button>
+      </div>
+
+      {/* Chat Messages Feed */}
       <div className="chat-body">
         {messages.map((msg, index) => {
           const isUser = msg.role === "user";
-          const isErrorMsg = msg.content.includes("Could not reach the local AI backend") || msg.content.includes("Model") && msg.content.includes("not found");
+          const isErrorMsg =
+            msg.content.includes("Could not reach the local AI backend") ||
+            (msg.content.includes("Model") && msg.content.includes("not found"));
 
-          const codeMatches = [...msg.content.matchAll(/```(?:[a-z]*)\n([\s\S]*?)```/g)];
+          const codeMatches = [...msg.content.matchAll(/```(?:[a-z0-9_-]*)\n([\s\S]*?)```/gi)];
           const hasCodeBlock = codeMatches.length > 0;
           const extractedCode = hasCodeBlock ? codeMatches[codeMatches.length - 1][1] : null;
 
@@ -114,19 +207,14 @@ export default function AIAssistant({
               <div key={index} className="connection-error-card">
                 <div className="error-card-header">
                   <AlertCircle size={18} className="text-yellow" />
-                  <h4>Ollama Setup Needed</h4>
+                  <h4>Ollama Setup Required</h4>
                 </div>
                 <p className="error-card-desc">
-                  CodeSaathi uses local AI via Ollama. It looks like the model <code>{modelName}</code> is not pulled yet.
+                  CodeSaathi AI uses local inference via Ollama. Model <code>{modelName}</code> is currently missing or downloading.
                 </p>
-
                 <div className="cmd-box">
-                  <div className="cmd-title">Run this in your command prompt:</div>
+                  <div className="cmd-title">Run in your terminal:</div>
                   <code className="cmd-text">ollama pull {modelName}</code>
-                </div>
-
-                <div className="error-card-footer">
-                  <small>Once pulled, ask your question again!</small>
                 </div>
               </div>
             );
@@ -161,17 +249,17 @@ export default function AIAssistant({
                       ) : (
                         <>
                           <Copy size={12} />
-                          <span>Copy Snippet</span>
+                          <span>Copy Code</span>
                         </>
                       )}
                     </button>
 
                     <button
                       className="snippet-btn apply-btn"
-                      onClick={() => onOpenDiffModal(extractedCode)}
+                      onClick={() => onOpenDiffModal && onOpenDiffModal(extractedCode)}
                     >
                       <Wand2 size={12} />
-                      <span>Preview & Apply Fix</span>
+                      <span>Preview & Apply</span>
                     </button>
                   </div>
                 )}
@@ -189,35 +277,17 @@ export default function AIAssistant({
               <span className="typing-dot" />
               <span className="typing-dot" />
               <span className="typing-dot" />
-              <span className="typing-text">CodeSaathi is thinking...</span>
+              <span className="typing-text">Qwen2.5-Coder:7b is generating locally...</span>
             </div>
           </div>
         )}
       </div>
 
-      {/* Suggested prompts */}
-      <div className="quick-actions-bar">
-        <span className="quick-title">TRY ASKING:</span>
-        <div className="quick-chips">
-          {QUICK_PROMPTS.map((qp, idx) => (
-            <button
-              key={idx}
-              className="quick-chip"
-              onClick={() => onSendMessage(qp.prompt)}
-              disabled={busy}
-            >
-              <Sparkles size={11} />
-              <span>{qp.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Composer */}
+      {/* Composer Area */}
       <div className="composer-container">
         <div className="composer-box">
           <textarea
-            placeholder="Ask CodeSaathi anything about your code..."
+            placeholder={`Ask about ${activeFile} or request code refactoring...`}
             value={promptText}
             onChange={(e) => setPromptText(e.target.value)}
             onKeyDown={(e) => {
@@ -230,21 +300,23 @@ export default function AIAssistant({
           />
           <div className="composer-toolbar">
             <span className="hint-text">
-              <span className="kbd">Enter</span> to send • <span className="kbd">Shift+Enter</span> for newline
+              <span className="kbd">Enter</span> send • <span className="kbd">Shift+Enter</span> newline
             </span>
             <button
               className="send-btn"
               onClick={handleSend}
               disabled={!promptText.trim() || busy}
+              title="Send Prompt (Enter)"
             >
               <Send size={14} />
             </button>
           </div>
         </div>
 
+        {/* Privacy Note Badge */}
         <div className="privacy-badge">
           <ShieldCheck size={12} />
-          <span>Local inference — your code never leaves your machine.</span>
+          <span>Local inference — your code never leaves your device.</span>
         </div>
       </div>
     </aside>

@@ -7,14 +7,25 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
-  Loader2
+  Loader2,
+  ShieldCheck,
+  ShieldAlert,
+  Lock,
+  Sparkles,
+  Terminal,
+  Activity,
+  Zap,
+  Wand2
 } from "lucide-react";
 
-import { DEFAULT_FILES } from "./data/defaultWorkspace";
+import api from "./api/client";
+import { DEFAULT_FILES, AI_ACTIONS } from "./data/defaultWorkspace";
 import ActivityBar from "./components/Sidebar/ActivityBar";
 import Explorer from "./components/Sidebar/Explorer";
-import SearchPanel from "./components/Sidebar/SearchPanel";
-import BugInspectorPanel from "./components/Sidebar/BugInspectorPanel";
+import AIToolsPanel from "./components/Sidebar/AIToolsPanel";
+import CodeReviewPanel from "./components/Sidebar/CodeReviewPanel";
+import HistoryPanel from "./components/Sidebar/HistoryPanel";
+import SettingsPanel from "./components/Sidebar/SettingsPanel";
 
 import EditorTabs from "./components/Editor/EditorTabs";
 import MonacoEditorWrapper from "./components/Editor/MonacoEditor";
@@ -29,15 +40,29 @@ import HeaderStatusPanel from "./components/Header/HeaderStatusPanel";
 export default function App() {
   const [files, setFiles] = useState(DEFAULT_FILES);
   const [activeFile, setActiveFile] = useState("main.py");
-  const [openFiles, setOpenFiles] = useState(["main.py", "README.md"]);
+  const [openFiles, setOpenFiles] = useState(["main.py", "security_demo.py", "README.md"]);
 
-  const [activeSidebarTab, setActiveSidebarTab] = useState("explorer");
-  const [isExplorerOpen, setIsExplorerOpen] = useState(true);
+  const [activeSidebarTab, setActiveSidebarTab] = useState("files");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMinimapOn, setIsMinimapOn] = useState(true);
 
-  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  // Bottom Panel state
+  const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(false);
+  const [bottomPanelTab, setBottomPanelTab] = useState("output");
   const [terminalOutput, setTerminalOutput] = useState(null);
   const [isRunningCode, setIsRunningCode] = useState(false);
+
+  // Semgrep Static Analysis state
+  const [semgrepResults, setSemgrepResults] = useState(null);
+  const [isScanningSemgrep, setIsScanningSemgrep] = useState(false);
+
+  // AI Analysis state
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isRunningCombinedReview, setIsRunningCombinedReview] = useState(false);
+
+  // Toast notification state
+  const [toast, setToToast] = useState(null);
 
   // Health and Status State
   const [healthData, setHealthData] = useState(null);
@@ -48,43 +73,41 @@ export default function App() {
     {
       role: "assistant",
       content:
-        "👋 **Welcome to CodeSaathi AI!**\n\nI'm your beginner-friendly local AI coding assistant. I run 100% locally on your machine via Ollama.\n\nChoose an action below or ask me any question about your code!"
+        "👋 **Welcome to CodeSaathi AI!**\n\nI run 100% locally on your machine via **Ollama + Qwen2.5-Coder:7b** with local **Semgrep** static analysis.\n\nYour code and prompts stay strictly on this device.\n\nTry clicking **Debug**, **Security Review**, or **Full Review** to analyze the active file!"
     }
   ]);
   const [busy, setBusy] = useState(false);
 
   const [diffModalData, setDiffModalData] = useState(null);
-  const [showWelcome, setShowWelcome] = useState(true);
+  const [showWelcome, setShowWelcome] = useState(false);
+
+  const showToast = (message, type = "info") => {
+    setToToast({ message, type });
+    setTimeout(() => setToToast(null), 3500);
+  };
 
   // Poll backend health on startup
   useEffect(() => {
     checkHealth();
-    const interval = setInterval(checkHealth, 8000);
+    const interval = setInterval(checkHealth, 10000);
     return () => clearInterval(interval);
   }, []);
 
   async function checkHealth() {
     setIsCheckingHealth(true);
     try {
-      const res = await fetch("http://localhost:8000/api/health");
-      if (res.ok) {
-        const data = await res.json();
-        setHealthData(data);
-      } else {
-        setHealthData({
-          backend_status: "ok",
-          ollama_status: "offline",
-          model: "qwen2.5-coder:3b",
-          available_models: [],
-          message: "Backend response returned an error."
-        });
-      }
-    } catch {
+      const data = await api.checkHealth();
+      setHealthData(data);
+    } catch (err) {
       setHealthData({
         backend_status: "offline",
         ollama_status: "offline",
-        model: "qwen2.5-coder:3b",
+        model: "qwen2.5-coder:7b",
+        model_available: false,
         available_models: [],
+        local_ai_active: false,
+        semgrep_available: false,
+        privacy_mode: "100% Local Inference",
         message: "Could not reach FastAPI backend. Start backend server."
       });
     } finally {
@@ -112,6 +135,7 @@ export default function App() {
     let lang = "python";
     if (filename.endsWith(".md")) lang = "markdown";
     if (filename.endsWith(".js") || filename.endsWith(".jsx")) lang = "javascript";
+    if (filename.endsWith(".json")) lang = "json";
 
     setFiles((prev) => ({
       ...prev,
@@ -123,6 +147,7 @@ export default function App() {
       }
     }));
     handleSelectFile(filename);
+    showToast(`Created file ${filename}`, "success");
   };
 
   const handleDeleteFile = (filename) => {
@@ -132,6 +157,7 @@ export default function App() {
       return copy;
     });
     handleCloseTab(filename);
+    showToast(`Deleted ${filename}`, "info");
   };
 
   const handleCodeChange = (newCode) => {
@@ -145,7 +171,7 @@ export default function App() {
     }));
   };
 
-  // AI Chat integration (connects to /api/chat)
+  // AI Chat integration
   async function askAI(questionText) {
     if (!questionText.trim() || busy) return;
     setMessages((prev) => [...prev, { role: "user", content: questionText }]);
@@ -155,21 +181,14 @@ export default function App() {
     const currentLang = files[activeFile]?.language || "python";
 
     try {
-      const res = await fetch("http://localhost:8000/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: questionText,
-          code: currentCode,
-          filename: activeFile,
-          language: currentLang,
-          history: messages.map((m) => ({ role: m.role, content: m.content })),
-          model: healthData?.model
-        })
+      const data = await api.sendChat({
+        message: questionText,
+        code: currentCode,
+        filename: activeFile,
+        language: currentLang,
+        history: messages.map((m) => ({ role: m.role, content: m.content })),
+        model: healthData?.model
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "AI Request failed");
 
       setMessages((prev) => [
         ...prev,
@@ -180,31 +199,206 @@ export default function App() {
         ...prev,
         {
           role: "assistant",
-          content: `⚠️ **Local AI Unavailable**\n\n${err.message}`
+          content: `⚠️ **Local AI Error**\n\n${err.message}`
         }
       ]);
+      showToast(err.message, "error");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  // Run AI Action (Explain, Debug, Find Bugs, Fix, Optimize, Tests, Security, Complexity)
+  async function handleRunAction(actionId) {
+    if (!activeFile || !files[activeFile] || busy || isAnalyzing) return;
+    const currentCode = files[activeFile].content;
+    const currentLang = files[activeFile].language || "python";
+
+    setIsAnalyzing(true);
+    setBusy(true);
+    showToast(`Running local AI action: ${actionId.toUpperCase()}...`, "info");
+
+    try {
+      const data = await api.analyzeCode({
+        code: currentCode,
+        language: currentLang,
+        filename: activeFile,
+        action: actionId,
+        model: healthData?.model
+      });
+
+      setAnalysisResult(data);
+      setBottomPanelTab("analysis");
+      setIsBottomPanelOpen(true);
+
+      // Append summary message to chat feed
+      let chatMessage = `### 🔍 AI Analysis: ${actionId.toUpperCase()}\n\n${data.summary}\n\n`;
+      if (data.issues && data.issues.length > 0) {
+        chatMessage += `**Issues Detected:**\n`;
+        data.issues.forEach((iss) => {
+          chatMessage += `- **Line ${iss.line || "?"} [${iss.severity || "INFO"}]:** ${iss.description || iss.message}\n`;
+        });
+        chatMessage += `\n`;
+      }
+      if (data.suggestions && data.suggestions.length > 0) {
+        chatMessage += `**Recommendations:**\n`;
+        data.suggestions.forEach((sug) => {
+          chatMessage += `- ${sug}\n`;
+        });
+        chatMessage += `\n`;
+      }
+      if (data.fixed_code) {
+        chatMessage += `**Suggested Solution:**\n\`\`\`${currentLang}\n${data.fixed_code}\n\`\`\`\n`;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: `Run AI action: ${actionId.toUpperCase()}` },
+        { role: "assistant", content: chatMessage }
+      ]);
+      showToast(`Analysis complete for ${actionId}`, "success");
+    } catch (err) {
+      showToast(`Analysis failed: ${err.message}`, "error");
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `⚠️ **Analysis Error:** ${err.message}` }
+      ]);
+    } finally {
+      setIsAnalyzing(false);
+      setBusy(false);
+    }
+  }
+
+  // Semgrep Static Analysis scan
+  async function handleRunSemgrep() {
+    if (!activeFile || !files[activeFile] || isScanningSemgrep) return;
+    setIsScanningSemgrep(true);
+    showToast("Running Semgrep open-source static scan locally...", "info");
+
+    try {
+      const data = await api.runStaticAnalysis({
+        code: files[activeFile].content,
+        language: files[activeFile].language || "python",
+        filename: activeFile
+      });
+
+      setSemgrepResults(data);
+      setBottomPanelTab("problems");
+      setIsBottomPanelOpen(true);
+      showToast(`Semgrep found ${data.total_findings || 0} issue(s)`, "info");
+    } catch (err) {
+      showToast(`Semgrep scan failed: ${err.message}`, "error");
+    } finally {
+      setIsScanningSemgrep(false);
+    }
+  }
+
+  // Combined AI Review (Semgrep + Qwen2.5-Coder)
+  async function handleRunCombinedReview() {
+    if (!activeFile || !files[activeFile] || isRunningCombinedReview || busy) return;
+    setIsRunningCombinedReview(true);
+    setBusy(true);
+    showToast("Running Combined Review: Semgrep AST + Qwen2.5-Coder...", "info");
+
+    try {
+      const data = await api.runCombinedReview({
+        code: files[activeFile].content,
+        language: files[activeFile].language || "python",
+        filename: activeFile,
+        model: healthData?.model
+      });
+
+      // Update Semgrep findings
+      if (data.semgrep_findings) {
+        setSemgrepResults({
+          tool: "semgrep",
+          status: data.semgrep_status || "success",
+          findings: data.semgrep_findings,
+          total_findings: data.semgrep_findings.length
+        });
+      }
+
+      // Format combined review into chat feed
+      let reviewContent = `## 🛡️ Unified Code Review (${activeFile})\n\n`;
+      reviewContent += `**Executive Summary:**\n${data.summary}\n\n`;
+
+      if (data.issues_explained && data.issues_explained.length > 0) {
+        reviewContent += `### Static & AI Findings Explained:\n`;
+        data.issues_explained.forEach((iss) => {
+          reviewContent += `#### Line ${iss.line || "?"} [${iss.severity || "WARNING"}]: ${iss.rule_id || "Issue"}\n`;
+          reviewContent += `- **Meaning:** ${iss.meaning}\n`;
+          reviewContent += `- **Impact:** ${iss.impact}\n`;
+          reviewContent += `- **Fix:** ${iss.fix}\n\n`;
+        });
+      }
+
+      if (data.recommendations && data.recommendations.length > 0) {
+        reviewContent += `### Recommendations:\n`;
+        data.recommendations.forEach((rec) => {
+          reviewContent += `- ${rec}\n`;
+        });
+        reviewContent += `\n`;
+      }
+
+      if (data.fixed_code) {
+        const lang = files[activeFile].language || "python";
+        reviewContent += `### Corrected Code Snippet:\n\`\`\`${lang}\n${data.fixed_code}\n\`\`\`\n`;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: `Run Full Unified Code Review on ${activeFile}` },
+        { role: "assistant", content: reviewContent }
+      ]);
+
+      setAnalysisResult({
+        action: "review",
+        summary: data.summary,
+        issues: data.issues_explained?.map((i) => ({
+          line: i.line,
+          severity: i.severity,
+          description: `${i.meaning} (Impact: ${i.impact})`
+        })) || [],
+        suggestions: data.recommendations || [],
+        fixed_code: data.fixed_code || "",
+        complexity: data.complexity || "Analyzed",
+        model: data.model,
+        mode: "local"
+      });
+
+      setBottomPanelTab("problems");
+      setIsBottomPanelOpen(true);
+      showToast("Unified Code Review complete!", "success");
+    } catch (err) {
+      showToast(`Review failed: ${err.message}`, "error");
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `⚠️ **Unified Review Error:** ${err.message}` }
+      ]);
+    } finally {
+      setIsRunningCombinedReview(false);
       setBusy(false);
     }
   }
 
   // Code Execution
   async function runCurrentCode() {
-    if (!activeFile || !files[activeFile]) return;
-    setIsTerminalOpen(true);
+    if (!activeFile || !files[activeFile] || isRunningCode) return;
+    setBottomPanelTab("output");
+    setIsBottomPanelOpen(true);
     setIsRunningCode(true);
 
     try {
-      const res = await fetch("http://localhost:8000/api/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: files[activeFile].content,
-          filename: activeFile
-        })
+      const data = await api.runCode({
+        code: files[activeFile].content,
+        filename: activeFile
       });
-      const data = await res.json();
       setTerminalOutput(data);
+      if (data.exit_code === 0) {
+        showToast("Execution finished (exit code 0)", "success");
+      } else {
+        showToast("Execution error", "error");
+      }
     } catch (err) {
       setTerminalOutput({
         stdout: "",
@@ -212,6 +406,7 @@ export default function App() {
         exit_code: 1,
         duration_ms: 0
       });
+      showToast("Execution failed", "error");
     } finally {
       setIsRunningCode(false);
     }
@@ -228,6 +423,7 @@ export default function App() {
 
   const handleApplyFix = (newCode) => {
     handleCodeChange(newCode);
+    showToast("Fix applied to editor!", "success");
   };
 
   const currentFileObj = files[activeFile];
@@ -235,41 +431,21 @@ export default function App() {
   const lineCount = currentCode.split("\n").length;
 
   const ollamaStatus = healthData?.ollama_status || "offline";
-  const modelName = healthData?.model || "qwen2.5-coder:3b";
-
-  // Header status badge renderer
-  const renderHeaderStatusIndicator = () => {
-    if (isCheckingHealth) {
-      return (
-        <span className="status-indicator-btn yellow">
-          <Loader2 size={12} className="spin" /> Loading model...
-        </span>
-      );
-    }
-    if (ollamaStatus === "connected") {
-      return (
-        <span className="status-indicator-btn green">
-          <CheckCircle2 size={12} /> Connected — Local AI ready
-        </span>
-      );
-    }
-    if (ollamaStatus === "model_missing") {
-      return (
-        <span className="status-indicator-btn orange">
-          <AlertCircle size={12} /> Model missing ({modelName})
-        </span>
-      );
-    }
-    return (
-      <span className="status-indicator-btn red">
-        <XCircle size={12} /> Offline — Ollama unavailable
-      </span>
-    );
-  };
+  const modelName = healthData?.model || "qwen2.5-coder:7b";
+  const modelAvailable = healthData?.model_available || false;
+  const isLocalActive = healthData?.local_ai_active || false;
+  const semgrepFindings = semgrepResults?.findings || [];
 
   return (
     <div className="app-shell">
-      {/* Top Header Bar */}
+      {/* Toast Notification Banner */}
+      {toast && (
+        <div className={`toast-notification ${toast.type}`}>
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* TOP BAR */}
       <header className="topbar">
         <div className="topbar-left">
           <div className="brand">
@@ -284,34 +460,80 @@ export default function App() {
 
           <div className="workspace-breadcrumbs">
             <span className="dot" />
-            <span>my-project</span>
+            <span>workspace</span>
             <span className="sep">/</span>
             <span className="active-file-tag">{activeFile}</span>
           </div>
         </div>
 
         <div className="topbar-right">
-          {/* Header Status Indicator Button */}
+          {/* LOCAL AI STATUS INDICATOR (Highly Visible) */}
           <div
             className="status-trigger-wrap"
             onClick={() => setShowStatusPanel(!showStatusPanel)}
+            title="Click for Local AI status & diagnostics"
           >
-            {renderHeaderStatusIndicator()}
+            {isCheckingHealth ? (
+              <span className="status-indicator-btn yellow">
+                <Loader2 size={12} className="spin" /> Checking runtime...
+              </span>
+            ) : ollamaStatus === "connected" && modelAvailable ? (
+              <span className="status-indicator-btn green">
+                <span className="live-dot" />
+                <strong>LOCAL AI ACTIVE</strong>
+                <span className="model-subtag font-mono">{modelName}</span>
+              </span>
+            ) : ollamaStatus === "model_missing" ? (
+              <span className="status-indicator-btn orange">
+                <AlertCircle size={12} /> Model Missing ({modelName})
+              </span>
+            ) : (
+              <span className="status-indicator-btn red">
+                <XCircle size={12} /> Offline — Ollama Disconnected
+              </span>
+            )}
           </div>
 
+          {/* Privacy Badge */}
+          <div
+            className="privacy-top-badge"
+            title="Your code stays on this device. Zero cloud transmission."
+            onClick={() => setShowStatusPanel(true)}
+          >
+            <Lock size={12} />
+            <span>Privacy First</span>
+          </div>
+
+          {/* Action: Semgrep Static Scan */}
+          <button
+            className="topbar-action-btn"
+            onClick={handleRunSemgrep}
+            disabled={isScanningSemgrep}
+            title="Scan code using Semgrep rules without execution"
+          >
+            {isScanningSemgrep ? (
+              <Loader2 size={13} className="spin" />
+            ) : (
+              <ShieldAlert size={13} />
+            )}
+            <span>Static Scan</span>
+          </button>
+
+          {/* Action: Run Python Code */}
           <button
             className="run-code-btn"
             onClick={runCurrentCode}
             disabled={isRunningCode}
-            title="Execute Python file"
+            title="Execute Python script locally"
           >
             <Play size={13} fill="currentColor" />
-            <span>{isRunningCode ? "Running..." : "Run"}</span>
+            <span>{isRunningCode ? "Running..." : "Run Code"}</span>
           </button>
 
+          {/* Architecture / Quick Guide */}
           <button
             className="icon-btn-pill"
-            title="Quick Start Guide"
+            title="Quick Start & Guide"
             onClick={() => setShowWelcome(true)}
           >
             <HelpCircle size={15} />
@@ -337,33 +559,66 @@ export default function App() {
           activeTab={activeSidebarTab}
           setActiveTab={setActiveSidebarTab}
           onOpenWelcome={() => setShowWelcome(true)}
-          isExplorerOpen={isExplorerOpen}
-          toggleExplorer={() => setIsExplorerOpen(!isExplorerOpen)}
+          isSidebarOpen={isSidebarOpen}
+          toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          semgrepFindingCount={semgrepFindings.length}
         />
 
         {/* Left Sidebar Panel */}
-        {isExplorerOpen && (
+        {isSidebarOpen && (
           <div className="sidebar-drawer">
-            {activeSidebarTab === "explorer" && (
+            {activeSidebarTab === "files" && (
               <Explorer
                 files={files}
                 activeFile={activeFile}
                 onSelectFile={handleSelectFile}
                 onCreateFile={handleCreateFile}
                 onDeleteFile={handleDeleteFile}
-                onClose={() => setIsExplorerOpen(false)}
+                onClose={() => setIsSidebarOpen(false)}
               />
             )}
 
-            {activeSidebarTab === "search" && (
-              <SearchPanel files={files} onSelectFile={handleSelectFile} />
+            {activeSidebarTab === "tools" && (
+              <AIToolsPanel
+                activeFile={activeFile}
+                onRunAction={handleRunAction}
+                isAnalyzing={isAnalyzing || busy}
+              />
             )}
 
-            {activeSidebarTab === "bugs" && (
-              <BugInspectorPanel
+            {activeSidebarTab === "review" && (
+              <CodeReviewPanel
                 activeFile={activeFile}
-                code={currentCode}
-                onAskAI={askAI}
+                semgrepResults={semgrepResults}
+                isScanningSemgrep={isScanningSemgrep}
+                onRunSemgrep={handleRunSemgrep}
+                onRunCombinedReview={handleRunCombinedReview}
+                isRunningCombinedReview={isRunningCombinedReview}
+                onAskAIForFix={askAI}
+                onSelectLine={() => {}}
+              />
+            )}
+
+            {activeSidebarTab === "history" && (
+              <HistoryPanel
+                messages={messages}
+                onSelectMessage={askAI}
+                onClearHistory={() =>
+                  setMessages([
+                    {
+                      role: "assistant",
+                      content: "Session cleared. What would you like to work on?"
+                    }
+                  ])
+                }
+              />
+            )}
+
+            {activeSidebarTab === "settings" && (
+              <SettingsPanel
+                healthData={healthData}
+                isCheckingHealth={isCheckingHealth}
+                onCheckHealth={checkHealth}
               />
             )}
           </div>
@@ -376,8 +631,11 @@ export default function App() {
             activeFile={activeFile}
             onSelectFile={setActiveFile}
             onCloseTab={handleCloseTab}
-            onNewFile={() => handleCreateFile(`untitled_${openFiles.length + 1}.py`)}
-            onCopyCode={() => navigator.clipboard?.writeText(currentCode)}
+            onNewFile={() => handleCreateFile(`script_${openFiles.length + 1}.py`)}
+            onCopyCode={() => {
+              navigator.clipboard?.writeText(currentCode);
+              showToast("Code copied to clipboard", "info");
+            }}
             isMinimapOn={isMinimapOn}
             onToggleMinimap={() => setIsMinimapOn(!isMinimapOn)}
           />
@@ -406,15 +664,20 @@ export default function App() {
             )}
           </div>
 
-          {/* Terminal Panel */}
-          {isTerminalOpen && (
+          {/* Collapsible Bottom Panel: Problems | Output | Analysis */}
+          {isBottomPanelOpen && (
             <TerminalPanel
               output={terminalOutput}
               isRunning={isRunningCode}
               onRun={runCurrentCode}
               onClear={() => setTerminalOutput(null)}
-              onClose={() => setIsTerminalOpen(false)}
+              onClose={() => setIsBottomPanelOpen(false)}
               onAskAI={askAI}
+              semgrepFindings={semgrepFindings}
+              analysisResult={analysisResult}
+              activeTab={bottomPanelTab}
+              onTabChange={setBottomPanelTab}
+              onOpenDiffModal={handleOpenDiffModal}
             />
           )}
 
@@ -424,11 +687,16 @@ export default function App() {
             lineCount={lineCount}
             language={currentFileObj?.language || "python"}
             backendOnline={healthData?.backend_status === "ok"}
-            ollamaOnline={ollamaStatus === "connected"}
+            ollamaOnline={ollamaStatus === "connected" && modelAvailable}
             modelName={modelName}
-            notice={ollamaStatus === "connected" ? "Ready" : "Offline"}
-            onToggleTerminal={() => setIsTerminalOpen(!isTerminalOpen)}
-            isTerminalOpen={isTerminalOpen}
+            semgrepAvailable={healthData?.semgrep_available || false}
+            problemsCount={semgrepFindings.length}
+            onToggleTerminal={() => setIsBottomPanelOpen(!isBottomPanelOpen)}
+            onOpenProblems={() => {
+              setBottomPanelTab("problems");
+              setIsBottomPanelOpen(true);
+            }}
+            isTerminalOpen={isBottomPanelOpen}
           />
         </main>
 
@@ -437,21 +705,25 @@ export default function App() {
           messages={messages}
           busy={busy}
           onSendMessage={askAI}
+          onRunAction={handleRunAction}
           activeFile={activeFile}
           onNewChat={() =>
             setMessages([
               {
                 role: "assistant",
                 content:
-                  "New session started! Ask me to explain code, find bugs, or suggest fixes."
+                  "New conversation started. Ask me to explain code, debug errors, or run a security audit!"
               }
             ])
           }
           onOpenDiffModal={handleOpenDiffModal}
-          ollamaOnline={ollamaStatus === "connected"}
+          ollamaOnline={ollamaStatus === "connected" && modelAvailable}
           modelName={modelName}
           availableModels={healthData?.available_models || []}
           onSelectModel={(m) => setHealthData((prev) => ({ ...prev, model: m }))}
+          onRunSemgrep={handleRunSemgrep}
+          onRunCombinedReview={handleRunCombinedReview}
+          isRunningCombinedReview={isRunningCombinedReview}
         />
       </div>
 

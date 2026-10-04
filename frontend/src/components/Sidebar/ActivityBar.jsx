@@ -1,77 +1,87 @@
 import React from "react";
-import { Folder, Search, MessageSquare, Bug, Settings, HelpCircle, History } from "lucide-react";
+import { Folder, Sparkles, ShieldAlert, History, Settings, HelpCircle, ShieldCheck } from "lucide-react";
 
-export default function ActivityBar({ activeTab, setActiveTab, onOpenWelcome, isExplorerOpen, toggleExplorer }) {
+export default function ActivityBar({
+  activeTab,
+  setActiveTab,
+  onOpenWelcome,
+  isSidebarOpen,
+  toggleSidebar,
+  semgrepFindingCount = 0
+}) {
+  const handleTabClick = (tab) => {
+    if (activeTab === tab && isSidebarOpen) {
+      toggleSidebar();
+    } else {
+      setActiveTab(tab);
+      if (!isSidebarOpen) toggleSidebar();
+    }
+  };
+
   return (
     <aside className="activity-bar">
       <div className="activity-top">
         <button
-          className={`activity-btn ${activeTab === "explorer" && isExplorerOpen ? "active" : ""}`}
-          onClick={() => {
-            if (activeTab === "explorer") {
-              toggleExplorer();
-            } else {
-              setActiveTab("explorer");
-              if (!isExplorerOpen) toggleExplorer();
-            }
-          }}
-          title="File Explorer (Ctrl+Shift+E)"
+          className={`activity-btn ${activeTab === "files" && isSidebarOpen ? "active" : ""}`}
+          onClick={() => handleTabClick("files")}
+          title="Files (Explorer)"
         >
           <Folder size={19} />
-          <span className="activity-tooltip">Explorer</span>
+          <span className="activity-tooltip">Files</span>
         </button>
 
         <button
-          className={`activity-btn ${activeTab === "search" && isExplorerOpen ? "active" : ""}`}
-          onClick={() => {
-            setActiveTab("search");
-            if (!isExplorerOpen) toggleExplorer();
-          }}
-          title="Search Workspace (Ctrl+Shift+F)"
+          className={`activity-btn ${activeTab === "tools" && isSidebarOpen ? "active" : ""}`}
+          onClick={() => handleTabClick("tools")}
+          title="AI Tools & Actions"
         >
-          <Search size={19} />
-          <span className="activity-tooltip">Search</span>
+          <Sparkles size={19} />
+          <span className="activity-tooltip">AI Tools</span>
         </button>
 
         <button
-          className={`activity-btn ${activeTab === "assistant" ? "active" : ""}`}
-          onClick={() => setActiveTab("assistant")}
-          title="AI Assistant (Ctrl+Shift+A)"
+          className={`activity-btn ${activeTab === "review" && isSidebarOpen ? "active" : ""}`}
+          onClick={() => handleTabClick("review")}
+          title="Code Review & Semgrep Static Analysis"
         >
-          <MessageSquare size={19} />
-          <span className="activity-tooltip">AI Assistant</span>
+          <ShieldAlert size={19} />
+          {semgrepFindingCount > 0 && (
+            <span className="activity-badge">{semgrepFindingCount}</span>
+          )}
+          <span className="activity-tooltip">Code Review</span>
         </button>
 
         <button
-          className={`activity-btn ${activeTab === "bugs" && isExplorerOpen ? "active" : ""}`}
-          onClick={() => {
-            setActiveTab("bugs");
-            if (!isExplorerOpen) toggleExplorer();
-          }}
-          title="Bug Inspector"
+          className={`activity-btn ${activeTab === "history" && isSidebarOpen ? "active" : ""}`}
+          onClick={() => handleTabClick("history")}
+          title="Prompt & Chat History"
         >
-          <Bug size={19} />
-          <span className="activity-tooltip">Bug Inspector</span>
+          <History size={19} />
+          <span className="activity-tooltip">History</span>
+        </button>
+
+        <button
+          className={`activity-btn ${activeTab === "settings" && isSidebarOpen ? "active" : ""}`}
+          onClick={() => handleTabClick("settings")}
+          title="Settings & Privacy Diagnostics"
+        >
+          <Settings size={19} />
+          <span className="activity-tooltip">Settings</span>
         </button>
       </div>
 
       <div className="activity-bottom">
+        <div className="privacy-sidebar-indicator" title="Privacy First: 100% Local Inference">
+          <ShieldCheck size={18} className="text-emerald" />
+        </div>
+
         <button
           className="activity-btn"
           onClick={onOpenWelcome}
-          title="Welcome & Quick Start Guide"
+          title="Quick Start & Architecture Guide"
         >
           <HelpCircle size={19} />
-          <span className="activity-tooltip">Quick Guide</span>
-        </button>
-
-        <button
-          className={`activity-btn ${activeTab === "settings" ? "active" : ""}`}
-          onClick={() => setActiveTab("settings")}
-          title="Settings"
-        >
-          <Settings size={19} />
-          <span className="activity-tooltip">Settings</span>
+          <span className="activity-tooltip">Guide</span>
         </button>
       </div>
     </aside>

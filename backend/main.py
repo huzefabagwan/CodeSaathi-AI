@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import subprocess
 import tempfile
 import sys
@@ -9,11 +9,12 @@ import time
 import os
 
 from services.ollama_service import ollama_service, OLLAMA_MODEL
+from services.semgrep_service import semgrep_service
 
 app = FastAPI(
     title="CodeSaathi Local AI Backend",
-    description="Offline-capable AI coding assistant powered by local Ollama models",
-    version="1.0.0"
+    description="Offline-capable, privacy-first AI coding assistant powered by Ollama (Qwen2.5-Coder:7b) and Semgrep static analysis",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -41,19 +42,38 @@ class ChatResponse(BaseModel):
     response: str
     model: str
     status: str = "success"
+    mode: str = "local"
 
 class HealthResponse(BaseModel):
     backend_status: str
     ollama_status: str
     model: str
+    model_available: bool
     available_models: List[str]
+    local_ai_active: bool
+    semgrep_available: bool
+    semgrep_version: Optional[str] = None
+    privacy_mode: str
     message: str
 
 class AnalyzeRequest(BaseModel):
     code: str = Field(..., min_length=1, description="Code to analyze")
     language: Optional[str] = Field("python", description="Language")
     filename: Optional[str] = Field("main.py", description="Filename")
-    action: Optional[str] = Field("find_bugs", description="Action: explain, find_bugs, improve, fix_errors, generate_tests")
+    action: Optional[str] = Field("find_bugs", description="Action: explain, debug, find_bugs, fix_errors, optimize, generate_tests, security_review, complexity_analysis")
+    history: Optional[List[MessageItem]] = Field(default=[], description="Conversation history")
+    model: Optional[str] = Field(None, description="Model override")
+
+class StaticAnalysisRequest(BaseModel):
+    code: str = Field(..., description="Code to scan with Semgrep")
+    language: Optional[str] = Field("python", description="Programming language")
+    filename: Optional[str] = Field("main.py", description="Filename")
+
+class ReviewRequest(BaseModel):
+    code: str = Field(..., description="Code for unified AI + static analysis review")
+    language: Optional[str] = Field("python", description="Programming language")
+    filename: Optional[str] = Field("main.py", description="Filename")
+    model: Optional[str] = Field(None, description="Model override")
 
 class RunRequest(BaseModel):
     code: str = Field(..., description="Python code to run")
@@ -62,51 +82,79 @@ class RunRequest(BaseModel):
 # Endpoints
 @app.get("/api/health", response_model=HealthResponse)
 async def health():
-    """GET /api/health: Check status of backend, Ollama server, and model availability."""
+    """GET /api/health: Check status of backend, local Ollama server, Qwen2.5-Coder model, and Semgrep."""
     return await ollama_service.get_health_status()
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    """POST /api/chat: Core chat endpoint connecting to local Ollama API."""
+    """POST /api/chat: Core chat endpoint connecting strictly to local Ollama API."""
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Prompt message cannot be empty.")
     return await ollama_service.generate_chat(
         prompt=req.message,
-        code=req.code,
-        filename=req.filename,
-        language=req.language,
+        code=req.code or "",
+        filename=req.filename or "main.py",
+        language=req.language or "python",
         history=[h.dict() for h in req.history] if req.history else [],
         model=req.model
     )
 
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
-    """POST /api/analyze: Specialized endpoint for code analysis, bug detection, and refactoring."""
-    action_prompts = {
-        "explain": "Explain this code step-by-step for a beginner programmer.",
-        "find_bugs": "Perform a deep bug audit on this code. Highlight any syntax errors, logic flaws, edge cases (e.g. division by zero, empty inputs), and security risks.",
-        "improve": "Suggest improvements for code readability, performance, structure, and language best practices.",
-        "fix_errors": "Identify any errors in this code, explain why they occur, and provide the complete corrected code snippet.",
-        "generate_tests": "Write comprehensive unit tests for this code."
-    }
-
-    prompt = action_prompts.get(req.action, f"Analyze this code: {req.action}")
-    result = await ollama_service.generate_chat(
-        prompt=prompt,
+    """
+    POST /api/analyze: Specialized endpoint for code analysis:
+    Explain, Debug, Find Bugs, Fix Errors, Optimize, Generate Tests, Security Review, Complexity Analysis.
+    Returns structured JSON.
+    """
+    if not req.code.strip():
+        raise HTTPException(status_code=400, detail="Code cannot be empty.")
+    
+    return await ollama_service.analyze_code(
         code=req.code,
-        filename=req.filename,
-        language=req.language
+        language=req.language or "python",
+        filename=req.filename or "main.py",
+        action=req.action or "find_bugs",
+        history=[h.dict() for h in req.history] if req.history else [],
+        model=req.model
     )
-    return {
-        "action": req.action,
-        "filename": req.filename,
-        "analysis": result["response"],
-        "model": result["model"]
-    }
+
+@app.post("/api/static-analysis")
+async def static_analysis(req: StaticAnalysisRequest):
+    """
+    POST /api/static-analysis: Run Semgrep open-source static analysis locally.
+    1. Saves code to a temporary file safely.
+    2. Runs Semgrep against the temporary file.
+    3. Captures structured JSON output.
+    4. Parses findings into a clean response.
+    5. Never executes user source code.
+    6. Safely cleans up temporary files.
+    """
+    return semgrep_service.scan_code(
+        code=req.code,
+        language=req.language or "python",
+        filename=req.filename or "main.py"
+    )
+
+@app.post("/api/review")
+async def review(req: ReviewRequest):
+    """
+    POST /api/review: Combined Code Review.
+    Combines Semgrep static analysis findings with Qwen2.5-Coder local intelligence.
+    Flow: User Code -> Semgrep -> Findings -> Qwen2.5-Coder -> Unified Review
+    """
+    return await ollama_service.combined_review(
+        code=req.code,
+        language=req.language or "python",
+        filename=req.filename or "main.py",
+        model=req.model
+    )
 
 @app.post("/api/run")
 async def run_code(req: RunRequest):
-    """POST /api/run: Execute Python code locally in temporary file with 10s timeout."""
+    """
+    POST /api/run: Execute Python code locally in temporary file with 10s timeout.
+    Isolated from static analysis & AI analysis endpoints.
+    """
     if not req.filename.endswith(".py"):
         return {
             "stdout": "",
